@@ -1,0 +1,115 @@
+
+
+```{r setup, include=FALSE}
+workdir = paste0(getwd(),'/projects/PA_ACA_vote')
+dir.create(workdir)
+setwd(workdir)
+knitr::opts_knit$set(root.dir = workdir)
+```
+
+```{r}
+library(acs)
+api.key.install("9bd59851b96fc5056470840819973f4a20313f83")
+covariates = c("Race", "Ethnicity", "Population", , "Health", "insurance", "Unemployment", "Income")
+tables = acs.lookup(table.name = c("poverty","income","race","ethnicity","population","unemployment","health","insurance")
+, endyear = 2011, span = 5, case.sensitive = FALSE)
+
+economic.tables = acs.lookup(keyword = "median income"
+                    , endyear = 2011, span = 5, case.sensitive = FALSE)
+
+age.tables = acs.lookup(table.name = "age"
+                    , endyear = 2011, span = 5, case.sensitive = FALSE)
+
+[1] "Total:"                    "Male:"                     "Male: Under 5 years"       "Male: 5 to 9 years"        "Male: 10 to 14 years"     
+ [6] "Male: 15 to 17 years"      "Male: 18 and 19 years"     "Male: 20 years"            "Male: 21 years"            "Male: 22 to 24 years"     
+[11] "Male: 25 to 29 years"      "Male: 30 to 34 years"      "Male: 35 to 39 years"      "Male: 40 to 44 years"      "Male: 45 to 49 years"     
+[16] "Male: 50 to 54 years"      "Male: 55 to 59 years"      "Male: 60 and 61 years"     "Male: 62 to 64 years"      "Male: 65 and 66 years"    
+[21] "Male: 67 to 69 years"      "Male: 70 to 74 years"      "Male: 75 to 79 years"      "Male: 80 to 84 years"      "Male: 85 years and over"  
+[26] "Female:"                   "Female: Under 5 years"     "Female: 5 to 9 years"      "Female: 10 to 14 years"    "Female: 15 to 17 years"   
+[31] "Female: 18 and 19 years"   "Female: 20 years"          "Female: 21 years"          "Female: 22 to 24 years"    "Female: 25 to 29 years"   
+[36] "Female: 30 to 34 years"    "Female: 35 to 39 years"    "Female: 40 to 44 years"    "Female: 45 to 49 years"    "Female: 50 to 54 years"   
+[41] "Female: 55 to 59 years"    "Female: 60 and 61 years"   "Female: 62 to 64 years"    "Female: 65 and 66 years"   "Female: 67 to 69 years"   
+[46] "Female: 70 to 74 years"    "Female: 75 to 79 years"    "Female: 80 to 84 years"    "Female: 85 years and over"
+
+tables = lapply(c("Population","Income", "Health", "Insurance", "Employment"), function(i) {
+        a = acs.lookup(keyword = i
+                    , endyear = 2011, span = 5, case.sensitive = FALSE)
+        return(a)
+})
+
+## Population
+# 61 Population of two or more races: C02003_009       C02003
+# 54 Population of one race: C02003_002       C02003
+# 55 Population of one race: White C02003_003       C02003
+# 56 Population of one race: Black or African American C02003_004       C02003
+# 57 Population of one race: American Indian and Alaska Native C02003_005       C02003
+# 58 Population of one race: Asian alone C02003_006       C02003
+# 59 Population of one race: Native Hawaiian and Other Pacific Islander C02003_007       C02003
+# 60 Population of one race: Some other race C02003_008       C02003
+# C02003_007
+# C02003_008
+# C02003_009
+
+## Income
+# 30 Median income in the past 12 months (in 2010 inflation-adjusted dollars) -- Total (dollars): B19326_001 B19326
+
+## Unemployment
+# 83 In labor force: Civilian labor force: Unemployed B23025_005       B23025
+
+
+PA = geo.make(state="PA", county="*")
+vars = c("B01001_001","B01001_002","B01001_003","B01001_004","B01001_005","B01001_006","B01001_007","B01001_008","B01001_009","B01001_010","B01001_011"
+         ,"B01001_012","B01001_013","B01001_014","B01001_015","B01001_016","B01001_017","B01001_018","B01001_019","B01001_020","B01001_021","B01001_022"
+         ,"B01001_023","B01001_024","B01001_025","B01001_026","B01001_027","B01001_028","B01001_029","B01001_030","B01001_031","B01001_032","B01001_033"
+         ,"B01001_034","B01001_035","B01001_036","B01001_037","B01001_038","B01001_039","B01001_040","B01001_041","B01001_042","B01001_043","B01001_044"
+         ,"B01001_045","B01001_046","B01001_047","B01001_048","B01001_049","B23025_005","B19326_001","C02003_002","C02003_003","C02003_004","C02003_005"
+         ,"C02003_006","C02003_007","C02003_008","C02003_009")
+
+acs.vars = acs.fetch(geo = PA, endyear = 2011, span = 5, variable = vars)
+
+demographics = data.table(cbind(county = acs.vars@geography$NAME,acs.vars@estimate))
+dem_names = c("total_pop", "total_male", "male_under5", "male_5_9", "male_10_14", "male_15_17", "male_18_19", "male_20", "male_21", "male_22_24", "male_25_29",
+              "male_30_34", "male_35_39", "male_40_44", "male_45_49", "male_50_54", "male_55_59", "male_60_61", "male_62_64", "male_65_66", "male_67_69",
+              "male_70_74", "male_75_79", "male_80_84", "male_85plus", "total_female", "female_under5", "female_5_9", "female_10_14", "female_15_17",
+              "female_18_19", "female_20", "female_21", "female_22_24", "female_25_29", "female_30_34", "female_35_39", "female_40_44", "female_45_49",
+              "female_50_54", "female_55_59", "female_60_61", "female_62_64", "female_65_66", "female_67_69", "female_70_74", "female_75_79", "female_80_84",
+              "female_85plus", "unemployed", "median_income", "pop_one_race", "pop_white", "pop_black", "pop_native", "pop_asian", "pop_pacisl", "pop_other",
+              "pop_2plus")
+setnames(demographics, vars, dem_names)
+demographics[,c(dem_names) := lapply(.SD, as.numeric), .SDcols = dem_names]
+demographics[,':='(county = toupper(unname(unlist(demographics[,demographics[,strsplit(county," ")][1]])))
+                   ,pop_napi = pop_native + pop_asian + pop_pacisl
+                   ,pct_white = pop_white / total_pop
+                   ,pct_black = pop_black / total_pop
+                   ,pct_napi = pop_napi / total_pop
+                   ,pct_2plus = pop_2plus / total_pop
+                   ,pct_other = pop_2plus / total_pop
+                   ,pct_male = total_male / total_pop
+                   ,pct_female = total_female / total_pop
+                   +pct_pop_under19 = (male_under5+ male_5_9+ male_10_14+ male_15_17+ male_18_19+
+                                      female_under5+ female_5_9+ female_10_14+ female_15_17+ female_18_19) / total_pop
+                   ,pct_pop_20_24 = (male_20 + male_21 + male_22_24 + female_20 + female_21 + female_22_24) / total_pop
+                   ,pct_pop_25_29 = (male_25_29+female_25_29) / total_pop
+                   ,pct_pop_30_34 = (male_30_34+female_30_34) / total_pop
+                   ,pct_pop_35_39 = (male_35_39+female_35_39) / total_pop
+                   ,pct_pop_40_44 = (male_40_44+female_40_44) / total_pop
+                   ,pct_pop_45_49 = (male_45_49+female_45_49) / total_pop
+                   ,pct_pop_50_54 = (male_50_54+female_50_54) / total_pop
+                   ,pct_pop_55_60 = (male_55_59+female_55_59) / total_pop
+                   ,pct_pop_60_64 = (male_60_61+male_62_64+female_60_61+female_62_64) / total_pop
+                   ,pct_pop_65plus = (male_65_66+male_67_69+male_70_74+male_75_79+male_80_84+male_85plus+
+                                        female_65_66+female_67_69+female_70_74+female_75_79+female_80_84+female_85plus) / total_pop
+                   ,pop_16plus = male_15_17 + female_15_17 + male_18_19 + female_18_19 + male_20 + male_21 + male_22_24 + female_20 + female_21 + female_22_24 + male_25_29+female_25_29+male_30_34+female_30_34+male_35_39+female_35_39+male_40_44+female_40_44+male_45_49+female_45_49+male_50_54+female_50_54+male_55_59+female_55_59+male_60_61+male_62_64+female_60_61+female_62_64+male_65_66+male_67_69+male_70_74+male_75_79+male_80_84+male_85plus+
+                                        female_65_66+female_67_69+female_70_74+female_75_79+female_80_84+female_85plus 
+                   )]
+
+demographics[,]
+
+
+demographics[,":="(pct_unemployed = unemployed / total_pop
+)]
+
+demographics[,list(county, pct_unemployed)]
+```
+
+Ok, so you found a few "black box" metrics that retrospectively correlate (although obviously don't prove or predict) the outcome. Seems you've fallen into the same trap of retrospective bias that you accuse others of. If you were so confident of your predictions, why weren't you advertising them before the election? At least others put their money where their mouths were.
