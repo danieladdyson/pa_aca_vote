@@ -15,7 +15,7 @@ tables = acs.lookup(table.name = c("poverty","income","race","ethnicity","popula
 , endyear = 2011, span = 5, case.sensitive = FALSE)
 
 economic.tables = acs.lookup(keyword = "median income"
-                    , endyear = 2011, span = 5, case.sensitive = FALSE)
+                    , endyear = 2014, span = 5, case.sensitive = FALSE)
 
 age.tables = acs.lookup(table.name = "age"
                     , endyear = 2011, span = 5, case.sensitive = FALSE)
@@ -33,7 +33,7 @@ age.tables = acs.lookup(table.name = "age"
 
 tables = lapply(c("Population","Income", "Health", "Insurance", "Employment"), function(i) {
         a = acs.lookup(keyword = i
-                    , endyear = 2011, span = 5, case.sensitive = FALSE)
+                    , endyear = 2015, span = 5, case.sensitive = FALSE)
         return(a)
 })
 
@@ -57,7 +57,7 @@ tables = lapply(c("Population","Income", "Health", "Insurance", "Employment"), f
 # 83 In labor force: Civilian labor force: Unemployed B23025_005       B23025
 
 
-PA = geo.make(state="PA", county="*")
+us_county = geo.make(state="*", county="*")
 vars = c("B01001_001","B01001_002","B01001_003","B01001_004","B01001_005","B01001_006","B01001_007","B01001_008","B01001_009","B01001_010","B01001_011"
          ,"B01001_012","B01001_013","B01001_014","B01001_015","B01001_016","B01001_017","B01001_018","B01001_019","B01001_020","B01001_021","B01001_022"
          ,"B01001_023","B01001_024","B01001_025","B01001_026","B01001_027","B01001_028","B01001_029","B01001_030","B01001_031","B01001_032","B01001_033"
@@ -65,7 +65,7 @@ vars = c("B01001_001","B01001_002","B01001_003","B01001_004","B01001_005","B0100
          ,"B01001_045","B01001_046","B01001_047","B01001_048","B01001_049","B23025_005","B19326_001","C02003_002","C02003_003","C02003_004","C02003_005"
          ,"C02003_006","C02003_007","C02003_008","C02003_009")
 
-acs.vars = acs.fetch(geo = PA, endyear = 2011, span = 5, variable = vars)
+acs.vars = acs.fetch(geo = us_county, endyear = 2015, span = 5, variable = vars)
 
 demographics = data.table(cbind(county = acs.vars@geography$NAME,acs.vars@estimate))
 dem_names = c("total_pop", "total_male", "male_under5", "male_5_9", "male_10_14", "male_15_17", "male_18_19", "male_20", "male_21", "male_22_24", "male_25_29",
@@ -77,16 +77,19 @@ dem_names = c("total_pop", "total_male", "male_under5", "male_5_9", "male_10_14"
               "pop_2plus")
 setnames(demographics, vars, dem_names)
 demographics[,c(dem_names) := lapply(.SD, as.numeric), .SDcols = dem_names]
-demographics[,':='(county = toupper(unname(unlist(demographics[,demographics[,strsplit(county," ")][1]])))
+demographics[,county1 := toupper(unname(unlist(demographics[,demographics[,strsplit(county,", ")][1]])))]
+
+demographics[,':='(county2 = toupper(unname(unlist(demographics[,demographics[,strsplit(county1," COUNTY")][1]])))
+                   ,state = toupper(unname(unlist(demographics[,demographics[,strsplit(county,", ")][2]])))
                    ,pop_napi = pop_native + pop_asian + pop_pacisl
                    ,pct_white = pop_white / total_pop
                    ,pct_black = pop_black / total_pop
-                   ,pct_napi = pop_napi / total_pop
+                   ,pct_napi = (pop_native + pop_asian + pop_pacisl) / total_pop
                    ,pct_2plus = pop_2plus / total_pop
                    ,pct_other = pop_2plus / total_pop
                    ,pct_male = total_male / total_pop
                    ,pct_female = total_female / total_pop
-                   +pct_pop_under19 = (male_under5+ male_5_9+ male_10_14+ male_15_17+ male_18_19+
+                   ,pct_pop_under19 = (male_under5+ male_5_9+ male_10_14+ male_15_17+ male_18_19+
                                       female_under5+ female_5_9+ female_10_14+ female_15_17+ female_18_19) / total_pop
                    ,pct_pop_20_24 = (male_20 + male_21 + male_22_24 + female_20 + female_21 + female_22_24) / total_pop
                    ,pct_pop_25_29 = (male_25_29+female_25_29) / total_pop
@@ -103,13 +106,7 @@ demographics[,':='(county = toupper(unname(unlist(demographics[,demographics[,st
                                         female_65_66+female_67_69+female_70_74+female_75_79+female_80_84+female_85plus 
                    )]
 
-demographics[,]
-
-
-demographics[,":="(pct_unemployed = unemployed / total_pop
-)]
-
-demographics[,list(county, pct_unemployed)]
+demographics[,pct_unemployed := unemployed / pop_16plus]
+saveRDS(demographics, file = "us_county_demographics")
 ```
 
-Ok, so you found a few "black box" metrics that retrospectively correlate (although obviously don't prove or predict) the outcome. Seems you've fallen into the same trap of retrospective bias that you accuse others of. If you were so confident of your predictions, why weren't you advertising them before the election? At least others put their money where their mouths were.
