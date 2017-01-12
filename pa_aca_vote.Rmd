@@ -5,6 +5,7 @@ workdir = paste0(getwd(),'/projects/PA_ACA_vote')
 dir.create(workdir)
 setwd(workdir)
 knitr::opts_knit$set(root.dir = workdir)
+# getwd()
 ```
 
 ```{r download data, echo=TRUE, message=FALSE}
@@ -127,33 +128,237 @@ aca[,":="(aca_plans_2015 = as.numeric(aca_plans_2015),
           aca_plans_2016 = as.numeric(aca_plans_2016))]
 for (j in c(2,3)) set(aca,which(is.na(aca[[j]])),j,0)
 
-aca[,aca_15_16_chg := (aca_plans_2016 - aca_plans_2015) / aca_plans_2016]
 
 ### election results data --------------------
 election = data.table(read.csv("https://raw.githubusercontent.com/mkearney/presidential_election_county_results_2016/master/pres16results.csv", stringsAsFactors = FALSE))
+lead = election[,list(lead = max(pct)), by = fips]
+election2 = merge(lead, election, by.x = c("lead","fips"), by.y = c("pct","fips"))
+
+### SAHIE data --------------------
+library(jsonlite)
+download.files("https://www.census.gov/did/www/sahie/data/files/sahie_2014.csv.zip", destfile = "sahie_2014.zip")
+unzip("sahie_2014.zip")
+
+sahie = data.table(read.csv("sahie_2014.csv", skip = 79, stringsAsFactors = FALSE))
+library(stringr)
+sahie[,countyfips := str_pad(countyfips, 3, pad = "0")]
+sahie[,fips := paste0(as.character(statefips), countyfips)]
+to_num = c("NUI","NIPR", "PCTUI")
+sahie[,c(to_num) := lapply(.SD, as.numeric), .SDcols = to_num] # pct uninsured by sex/income/age group
+sahie = sahie[geocat == 50 & iprcat == "0" & sexcat == "0" & racecat == "0" & agecat == "0",list(PCTUI = PCTUI / 100, fips)] # filter to demographic totals; NUI = total uninsured by demographic; NIPR = total population b demographic
 
 ### join data --------------------
-lapply(list(demographics, aca, election), setkeyv, "fips")
+lapply(list(demographics, aca, election, sahie), setkeyv, "fips")
 
 joined = aca[election]
 joined = demographics[joined]
+joined = sahie[joined]
 state_totals = joined[,list(county_votes = max(total_votes)), by = st]
-joined = merge(joined, state_totals, by = "st", all = TRUE)
-joined[,":="(pct_plans_15 = aca_plans_2015 / total_pop,
-             pct_plans_16 = aca_plans_2016 / total_pop)]
+joined = merge(joined, state_totals, by.x = "st", by.y = "st", all = TRUE)
+joined[,":="(plans_15_percap = (aca_plans_2015 / total_pop) * 1000,
+             plans_16_percap = (aca_plans_2016 / total_pop) * 1000)]
 joined = joined[cand == "Donald Trump"]
+saveRDS(joined, file = "joined_election_data")
+```
+
+```{r plot ACA relationships, include = FALSE}
+library(ggplot2)
+
+### enrollment 2015-16 vs votes --------------------
+pct_aca_pop = joined[,list(pct_aca_pop_15 = (sum(aca_plans_2015, na.rm=TRUE) / sum(total_pop, na.rm=TRUE)) * 1000
+                           ,pct_aca_pop_16 = (sum(aca_plans_2016, na.rm=TRUE) / sum(total_pop, na.rm=TRUE)) * 1000
+                           )]
+
+## logged plans vs % for Trump
+# aca_15_16_chg
+# pct_plans_16
+ggplot(data = joined, aes(x = pct, y = PCTUI)) + geom_point() + 
+  # geom_hline(data = pct_aca_pop, aes(yintercept = PCTUI), color = "red") +
+  geom_smooth() + theme_bw() + 
+  scale_y_continuous(label = scales::percent, limits = c(0,.5)) + 
+  scale_x_continuous(label = scales::percent) +
+  #scale_y_log10() + 
+  # scale_x_log10() +
+  labs(title = "Percent uninsured vs Votes for Trump by county"
+       ,x = "% of vote for Trump"
+       ,y = "% of uninsured adults 18-64 in county")
+
+## Trump lead stuff
+ggplot(data = joined, aes(x = lead, y = plans_16_percap, fill = lead)) + 
+  geom_boxplot() +
+  theme_bw()
+
+### plot change in ACA --------------------
+joined[,aca_15_16_chg := (aca_plans_2016 - aca_plans_2015) / aca_plans_2015]
+
+pct_aca_chg = joined[,list(aca_15_16_chg = (sum(aca_plans_2016, na.rm=TRUE) - sum(aca_plans_2015, na.rm=TRUE)) / sum(aca_plans_2015, na.rm=TRUE))]
+
+ggplot(data = joined, aes(x = pct, y = aca_15_16_chg)) + geom_point() + 
+  geom_hline(data = pct_aca_chg, aes(yintercept = aca_15_16_chg), color = "red") +
+  geom_smooth(method = "lm") + theme_bw() + 
+  scale_y_continuous(label = scales::percent) + 
+  scale_x_continuous(label = scales::percent) +
+  labs(title = "Votes for Trump vs 2015-16 change in ACA selections"
+       ,x = "% of vote for Trump"
+       ,y = "% change in number of ACA plan selections by county")
+
+## Trump & total population
+ggplot(data = joined, aes(x = pct, y = total_pop)) + geom_point() + theme_bw() + scale_y_log10() +
+  geom_smooth(method="gam")
+
+
+## fit models for change in ACA
+## ancova on 15 & 16 enrollment
+mean_aca_15 = joined[,mean(plans_15_percap, na.rm=TRUE)]
+joined[,aca_basediff := plans_15_percap - mean_aca_15]
+aca_ancova = lm(plans_16_percap ~ pct + aca_basediff + log(total_pop), data = joined)
+summary(aca_ancova)
+
+summary(glm(pct ~ plans_16_percap, data = joined, family=quasibinomial()))
+
+# are total pop & aca_15_16_chg correlated?
+joined[aca_15_16_chg != Inf,cor(log(total_pop), aca_15_16_chg)] # -0.16493
+ggplot(data = joined[aca_15_16_chg != Inf,], aes(x = log(total_pop), y = aca_15_16_chg)) +
+  geom_point() + geom_smooth(method = "lm")
+
+fit1 = gam(pct ~ s(aca_15_16_chg), family = quasibinomial(), data = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,])
+fit2 = gam(pct ~ s(aca_15_16_chg) + log(total_pop), family = quasibinomial(), data = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,])
+fit3 = gam(pct ~ s(aca_15_16_chg) + pct_black, family = quasibinomial(), data = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,])
+# plot residuals
+# plot(fitted(fit2), resid(fit2)) # not bad, a little unbalanced
+
+## plot actual & adjusted plots
+pred_aca = data.table(cbind(trump = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf, pct]
+                 ,aca_adjusted = fitted(fit2)
+                 ,aca_pred = fitted(fit1)
+                 ,aca_black = fitted(fit3)
+                 ,aca_true = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,aca_15_16_chg]
+                 ))
+pred_aca_melt = melt(pred_aca, id.vars = "trump")
+ggplot(data = pred_aca_melt[variable != "aca_pred",], aes(x = trump, y = value, color = variable)) + 
+  geom_point() + 
+  geom_smooth(method="lm") +
+  theme_bw() +
+
+### PCA on input variables --------------------
+library(FactoMineR)
+
+election_pca = PCA(joined[complete.cases(joined),list(pct_female, pct_male,
+                                                      pct_white, pct_minority, PCTUI,
+                                                      pct_unemployed, median_income,
+                                                      median_age, plans_16_percap, pct)]
+                   ,scale.unit = TRUE
+                   ,ncp = 10
+                   )
+plot(election_pca, choix="var") # variable loadings
+round(election_pca$eig, 3) # % var explained
+
+election_pca$var$cor
 
 ```
 
-```{r plot relationships, include = FALSE}
-library(ggplot2)
-ggplot(data = joined, aes(x = pct, y = aca_15_16_chg)) + geom_point() +
-  geom_smooth()
+```{r Pennsylvania Medicaid data}
+### PA Medicaid data --------------------
+## PA public assistance data - September 2016
 
-ggplot(data = joined, aes(x = as.character(ifelse(pct >= .5, 1, 0)), y = aca_15_16_chg)) + geom_boxplot()
+download.file("http://listserv.dpw.state.pa.us/Scripts/wa.exe?A3=ind16&L=MA-FOOD-STAMPS-AND-CASH-STATS&E=base64&P=12033350&B=--_004_48d7efb1dcfa4382bb579a08f115f763ENCTCEXCH011PALCL_&T=application%2Fvnd.openxmlformats-officedocument.spreadsheetml.sheet;%20name=%22MA_TANF_GA_SNAP_Sept.%202016.xlsx%22&N=MA_TANF_GA_SNAP_Sept.%202016.xlsx&attachment=q&XSS=3"
+              , destfile = "pa_assistance.xlsx")
+
+ma_all = data.table(readxl::read_excel("pa_assistance.xlsx", sheet = "MA Individuals-HistorybyCounty", skip = 1))
+setnames(ma_all, names(ma_all),
+         c("county",'ma_jul_03','ma_aug_03', 'ma_sep_03', 'ma_oct_03', 'ma_nov_03', 'ma_dec_03', 'ma_jan_04', 'ma_feb_04', 'ma_mar_04',
+           'ma_apr_04', 'ma_may_04', 'ma_jun_04', 'ma_jul_04', 'ma_aug_04', 'ma_sep_04', 'ma_oct_04', 'ma_nov_04','ma_dec_04', 'ma_jan_05',
+           'ma_feb_05', 'ma_mar_05', 'ma_apr_05', 'ma_may_05', 'ma_jun_05', 'ma_jul_05','ma_aug_05', 'ma_sep_05', 'ma_oct_05', 'ma_nov_05',
+           'ma_dec_05', 'ma_jan_06', 'ma_feb_06', 'ma_mar_06', 'ma_apr_06', 'ma_may_06', 'ma_jun_06', 'ma_jul_06', 'ma_aug_06', 'ma_sep_06',
+           'ma_oct_06', 'ma_nov_06', 'ma_dec_06', 'ma_jan_07', 'ma_feb_07', 'ma_mar_07', 'ma_apr_07', 'ma_may_07', 'ma_jun_07', 'ma_jul_07',
+           'ma_aug_07', 'ma_sep_07', 'ma_oct_07', 'ma_nov_07', 'ma_dec_07', 'ma_jan_08', 'ma_feb_08', 'ma_mar_08', 'ma_apr_08', 'ma_may_08',
+           'ma_jun_08', 'ma_jul_08', 'ma_aug_08', 'ma_sep_08', 'ma_oct_08', 'ma_nov_08', 'ma_dec_08', 'ma_jan_09', 'ma_feb_09', 'ma_mar_09',
+           'ma_apr_09', 'ma_may_09', 'ma_jun_09', 'ma_jul_09', 'ma_aug_09', 'ma_sep_09', 'ma_oct_09', 'ma_nov_09', 'ma_dec_09', 'ma_jan_10',
+           'ma_feb_10', 'ma_mar_10', 'ma_apr_10', 'ma_may_10', 'ma_jun_10', 'ma_jul_10', 'ma_aug_10', 'ma_sep_10', 'ma_oct_10', 'ma_nov_10',
+           'ma_dec_10', 'ma_jan_11', 'ma_feb_11', 'ma_mar_11', 'ma_apr_11', 'ma_may_11', 'ma_jun_11', 'ma_jul_11', 'ma_aug_11', 'ma_sep_11',
+           'ma_oct_11', 'ma_nov_11', 'ma_dec_11', 'ma_jan_12', 'ma_feb_12', 'ma_mar_12', 'ma_apr_12', 'ma_may_12', 'ma_jun_12', 'ma_jul_12',
+           'ma_aug_12', 'ma_sep_12', 'ma_oct_12', 'ma_nov_12', 'ma_dec_12', 'ma_jan_13', 'ma_feb_13', 'ma_mar_13', 'ma_apr_13', 'ma_may_13',
+           'ma_jun_13', 'ma_jul_13', 'ma_aug_13', 'ma_sep_13', 'ma_oct_13', 'ma_nov_13', 'ma_dec_13', 'ma_jan_14', 'ma_feb_14', 'ma_mar_14',
+           'ma_apr_14', 'ma_may_14', 'ma_jun_14', 'ma_jul_14', 'ma_aug_14', 'ma_sep_14', 'ma_oct_14', 'ma_nov_14', 'ma_dec_14', 'ma_jan_15',
+           'ma_feb_15', 'ma_mar_15', 'ma_apr_15', 'ma_may_15', 'ma_jun_15', 'ma_jul_15', 'ma_aug_15', 'ma_sep_15', 'ma_oct_15', 'ma_nov_15',
+           'ma_dec_15', 'ma_jan_16', 'ma_feb_16', 'ma_mar_16', 'ma_apr_16', 'ma_may_16', 'ma_jun_16', 'ma_jul_16', 'ma_aug_16', 'ma_sep_16'))
+
+ma_all = ma_all[complete.cases(ma_all)]
+
+ma_all[,ma_jul_14 := as.numeric(ma_jul_14)]
+
+ma_all[,":=" (med_asst_03 = rowMeans(ma_all[,grep("*_03",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_04 = rowMeans(ma_all[,grep("*_04",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_05 = rowMeans(ma_all[,grep("*_05",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_06 = rowMeans(ma_all[,grep("*_06",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_07 = rowMeans(ma_all[,grep("*_07",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_08 = rowMeans(ma_all[,grep("*_08",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_09 = rowMeans(ma_all[,grep("*_09",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_10 = rowMeans(ma_all[,grep("*_10",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_11 = rowMeans(ma_all[,grep("*_11",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_12 = rowMeans(ma_all[,grep("*_12",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_13 = rowMeans(ma_all[,grep("*_13",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_14 = rowMeans(ma_all[,grep("*_14",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_15 = rowMeans(ma_all[,grep("*_15",names(ma_all),value=TRUE),with=FALSE]),
+              ma_asst_16 = rowMeans(ma_all[,grep("*_16",names(ma_all),value=TRUE),with=FALSE])
+              )]
+
+### Filter election data to PA --------------------
+pa_data = joined[ state == "PENNSYLVANIA",]
+pa_data[, county2 := sapply(strsplit(pa_data[,county], " County"), `[`, 1)]
 
 
+### merge PA/Medicaid data --------------------
+pa_aca = merge(pa_data, ma_all, all.x = TRUE, by.x = "county2", by.y = "county")
 
-list.files()
+### graph PA data --------------------
+pa_aca[, ":=" (pct_ma_14 = ma_asst_14 / total_pop
+               ,pct_ma_15 = ma_asst_15 / total_pop
+               ,pct_ma_16 = ma_asst_16 / total_pop
+               ,enroll_chg_14_15 = (ma_asst_15 - ma_asst_14) / ma_asst_14
+               ,enroll_chg_15_16 = (ma_asst_16 - ma_asst_15) / ma_asst_15
+                )]
+
+### plot pa medicaid & Trump data --------------------
+## excluding Philadelphia, which has a very high MA enrollment rate & low 
+ggplot(data = pa_aca[county2 != "Philadelphia"], aes(x = pct, y = pct_ma_16)) + geom_point() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Pennsylvania -\nShare of vote for Trump vs 2016 Medicaid enrollees"
+       ,y = "% of population on Medicaid"
+       ,x = "% of vote for Trump") +
+  scale_y_continuous(label = scales::percent, limits = c(0,.5)) + scale_x_continuous(label = scales::percent) +
+  theme_bw()
+
+pa_fit = glm(pct ~ pct_ma_16 + PCTUI + log(total_pop) + pct_white + pct_unemployed, data = pa_aca, family = quasibinomial())
+round(coef(summary(pa_fit)), 2)
+vif(pa_fit)
+```
+
+```{r regression of ACA & Trump}
+### national ACA data --------------------
+## Linear regression
+ggplot(data = joined, aes(pct)) + geom_density()
+fit = glm(data = joined
+          , pct ~ pct_plans_16 + median_age + median_income + pct_female + pct_white + pct_black
+          , family = quasibinomial(link = logit))
+summary(fit)
+
+joined[,":="(lead2 = ifelse(lead == "Donald Trump",1,0)
+             ,pct_minority = pct_black + pct_napi + pct_other + pct_2plus)]
+
+fit_trump = glm(data = joined
+          , pct ~ PCTUI + plans_16_percap + median_age + median_income + pct_male + pct_white + log(total_pop) + pct_unemployed
+          , family = quasibinomial(link = logit))
+round(coef(summary(fit_trump)), 2)
+
+vif(fit_trump)
+plot(fitted(fit_trump), resid(fit_trump))
+
+
+## LOESS regression
+fit_all_glm = glm(pct ~ plans_16_percap + pct_black + pct_white + pct_2plus + median_income + median_age, family = quasibinomial(), data = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,])
+
+fit_all_gam = gam(pct ~ s(plans_16_percap) + pct_black + pct_white + pct_2plus + median_income + median_age, family = quasibinomial(), data = joined[!is.na(aca_15_16_chg) & aca_15_16_chg != Inf,])
+
 ```
 
